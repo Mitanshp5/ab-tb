@@ -216,7 +216,13 @@ def build_config(variant: dict) -> dict:
 
 
 def find_data_dirs(data_root: Path):
-    """Find train/test image+label dirs, handling 'valid' vs 'val' naming."""
+    """Find train/test image+label dirs, handling 'valid' vs 'val' naming and nested data dirs."""
+    # Automatically resolve nested 'data/data' vs 'data'
+    if not (data_root / "train").exists() and (data_root / "data" / "train").exists():
+        data_root = data_root / "data"
+    elif not (data_root / "train").exists() and (data_root.parent / "train").exists():
+        data_root = data_root.parent
+
     # Train
     for name in ["train"]:
         d = data_root / name / "images"
@@ -225,7 +231,7 @@ def find_data_dirs(data_root: Path):
             train_lbl = str(data_root / name / "labels")
             break
     else:
-        raise FileNotFoundError(f"No train/images found under {data_root}")
+        raise FileNotFoundError(f"No train/images found under {data_root} or {data_root / 'data'}. Please ensure train/images/ and train/labels/ exist.")
 
     # Test / val
     for split in ["test", "val", "valid"]:
