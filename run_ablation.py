@@ -20,6 +20,9 @@ import sys
 import time
 from pathlib import Path
 
+# Ensure project root is in sys.path so local modules (data, models, loss, etc.) can be imported
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+
 import torch
 import yaml
 
