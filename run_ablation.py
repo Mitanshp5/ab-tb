@@ -251,12 +251,13 @@ def evaluate_model(model, test_loader, device, num_classes, class_names):
     """Run evaluation, return metrics dict."""
     from utils.metrics import SegmentationMetrics
     import numpy as np
+    from tqdm import tqdm
 
     model.eval()
     metrics = SegmentationMetrics(num_classes=num_classes, class_names=class_names)
     times = []
 
-    for batch in test_loader:
+    for batch in tqdm(test_loader, desc="Evaluating", leave=False):
         imgs = batch["image"].to(device)
         masks = batch["mask"].to(device)
         t0 = time.time()
@@ -393,7 +394,8 @@ def train_variant(config: dict, variant_name: str, num_epochs: int = None, resum
         total_loss = 0.0
         optimizer.zero_grad()
 
-        for step, batch in enumerate(train_loader):
+        pbar = tqdm(train_loader, desc=f"[{variant_name}] Ep {epoch+1}/{n_epochs}", leave=False)
+        for step, batch in enumerate(pbar):
             imgs = batch["image"].to(device)
             masks = batch["mask"].to(device)
 
@@ -410,7 +412,9 @@ def train_variant(config: dict, variant_name: str, num_epochs: int = None, resum
                 scaler.update()
                 optimizer.zero_grad()
 
-            total_loss += loss.item() * t_cfg["accumulation_steps"]
+            step_loss = loss.item() * t_cfg["accumulation_steps"]
+            total_loss += step_loss
+            pbar.set_postfix({"loss": f"{step_loss:.4f}"})
 
         scheduler.step()
 
@@ -551,8 +555,11 @@ def main():
         except Exception as e:
             logger.warning(f"Could not load existing results file {args.output}: {e}")
 
-    for variant in variants_to_run:
+    from tqdm import tqdm
+    variant_pbar = tqdm(variants_to_run, desc="Overall Ablation Progress")
+    for variant in variant_pbar:
         name = variant["name"]
+        variant_pbar.set_description(f"Running: {name}")
 
         # Check if variant output already exists in JSON and checkpoint is complete
         if not args.no_resume and name in completed_variant_names:
