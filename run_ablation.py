@@ -553,6 +553,8 @@ def main():
                     completed_variant_names = {r["variant"] for r in existing_data if "variant" in r and r.get("metrics")}
                     logger.info(f"Loaded {len(all_results)} existing variant results from {args.output}")
         except Exception as e:
+            logger.warning(f"Could not load existing results file {args.output}: {e}")
+
     variant_pbar = tqdm(variants_to_run, desc="Overall Ablation Progress")
     for variant in variant_pbar:
         name = variant["name"]
