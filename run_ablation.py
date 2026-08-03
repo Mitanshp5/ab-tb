@@ -520,6 +520,18 @@ def main():
     parser.add_argument("--no-resume", action="store_true", help="Disable resuming from checkpoints/previous results")
     args = parser.parse_args()
 
+    if torch.cuda.is_available():
+        logger.info(f"Using NVIDIA GPU: {torch.cuda.get_device_name(0)}")
+    else:
+        logger.warning(
+            "\n" + "="*70 + "\n"
+            "CUDA NOT DETECTED: Running on CPU (will be very slow)!\n"
+            "If you have an NVIDIA GPU, install CUDA-enabled PyTorch with:\n"
+            "  pip uninstall -y torch torchvision\n"
+            "  pip install torch torchvision --index-url https://download.pytorch.org/whl/cu124\n"
+            + "="*70
+        )
+
     variants_to_run = ABLATION_VARIANTS
     if args.variants:
         variants_to_run = [v for v in ABLATION_VARIANTS if v["name"] in args.variants]
