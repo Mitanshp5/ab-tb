@@ -25,6 +25,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 import torch
 import yaml
+from tqdm import tqdm
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 logger = logging.getLogger(__name__)
@@ -251,7 +252,6 @@ def evaluate_model(model, test_loader, device, num_classes, class_names):
     """Run evaluation, return metrics dict."""
     from utils.metrics import SegmentationMetrics
     import numpy as np
-    from tqdm import tqdm
 
     model.eval()
     metrics = SegmentationMetrics(num_classes=num_classes, class_names=class_names)
@@ -553,9 +553,6 @@ def main():
                     completed_variant_names = {r["variant"] for r in existing_data if "variant" in r and r.get("metrics")}
                     logger.info(f"Loaded {len(all_results)} existing variant results from {args.output}")
         except Exception as e:
-            logger.warning(f"Could not load existing results file {args.output}: {e}")
-
-    from tqdm import tqdm
     variant_pbar = tqdm(variants_to_run, desc="Overall Ablation Progress")
     for variant in variant_pbar:
         name = variant["name"]
