@@ -154,7 +154,12 @@ ABLATION_VARIANTS = [
         "checkpoint": None,
         "config_overrides": {
             "model": {"encoder_frozen": True},
-            "training": {"unfreeze_encoder_epoch": 5, "encoder_lr": 5e-6},
+            "training": {
+                "unfreeze_encoder_epoch": 5,
+                "encoder_lr": 5e-6,
+                "batch_size": 4,
+                "accumulation_steps": 2,
+            },
         },
     },
     {
@@ -377,18 +382,26 @@ def train_variant(config: dict, variant_name: str, num_epochs: int = None, resum
         logger.info(f"[{variant_name}] Training already completed ({start_epoch}/{n_epochs} epochs). Skipping training loop.")
         return str(best_ckpt if best_ckpt.exists() else latest_ckpt), best_iou
 
-    # Freeze/unfreeze encoder
+    # Freeze/unfreeze encoder (account for resuming after unfreeze_epoch)
     unfreeze_epoch = t_cfg.get("unfreeze_encoder_epoch", 999)
+    should_be_unfrozen = (not model_cfg.get("encoder_frozen", True)) or (start_epoch >= unfreeze_epoch)
     for p in model.encoder.parameters():
-        p.requires_grad = not model_cfg.get("encoder_frozen", True)
+        p.requires_grad = should_be_unfrozen
+    if start_epoch >= unfreeze_epoch:
+        param_groups[1]["lr"] = t_cfg.get("encoder_lr", t_cfg["learning_rate"])
+        logger.info(f"[{variant_name}] Resuming at epoch {start_epoch} with encoder unfrozen")
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
 
     for epoch in range(start_epoch, n_epochs):
         # Unfreeze encoder at specified epoch
-        if epoch == unfreeze_epoch:
+        if epoch == unfreeze_epoch and start_epoch <= unfreeze_epoch:
             for p in model.encoder.parameters():
                 p.requires_grad = True
             param_groups[1]["lr"] = t_cfg.get("encoder_lr", t_cfg["learning_rate"])
             logger.info(f"[{variant_name}] Epoch {epoch}: encoder unfrozen")
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
 
         model.train()
         total_loss = 0.0
@@ -615,11 +628,16 @@ def main():
 
         except Exception as e:
             logger.error(f"[{name}] FAILED: {e}", exc_info=True)
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
             err_res = {"variant": name, "description": variant["description"], "metrics": {}, "error": str(e)}
             all_results = [r for r in all_results if r.get("variant") != name]
             all_results.append(err_res)
             with open(args.output, "w") as f:
                 json.dump(all_results, f, indent=2)
+
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
 
     print_results_table(all_results)
     logger.info(f"All ablation results updated in {args.output}")
