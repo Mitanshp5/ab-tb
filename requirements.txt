@@ -30,3 +30,10 @@ scikit-learn>=1.3.0
 
 # Logging
 tensorboard>=2.15.0
+
+# Cloud Uploaders (Optional based on chosen provider)
+pymongo>=4.6.0        # For MongoDB Atlas JSON storage
+dnspython>=2.6.0      # Required for mongodb+srv:// connection URIs
+# boto3>=1.34.0       # For AWS S3 uploads (optional)
+# huggingface_hub>=0.20.0 # For HuggingFace Hub uploads (optional)
+# wandb>=0.16.0       # For Weights & Biases logging (optional)

@@ -279,7 +279,14 @@ def evaluate_model(model, test_loader, device, num_classes, class_names):
     return results
 
 
-def train_variant(config: dict, variant_name: str, num_epochs: int = None, resume: bool = True):
+def train_variant(
+    config: dict,
+    variant_name: str,
+    num_epochs: int = None,
+    resume: bool = True,
+    mongo_syncer: Optional[Any] = None,
+    dry_run_sync: bool = False,
+):
     """Train a single ablation variant and return checkpoint path (supports resuming)."""
     import torch
     import torch.nn as nn
@@ -457,6 +464,19 @@ def train_variant(config: dict, variant_name: str, num_epochs: int = None, resum
             ckpt_dict["best_iou"] = best_iou
             torch.save(ckpt_dict, best_ckpt)
 
+        if mongo_syncer:
+            device_name = torch.cuda.get_device_name(0) if torch.cuda.is_available() else "CPU"
+            mongo_syncer.sync_heartbeat(
+                status="RUNNING",
+                variant=variant_name,
+                current_epoch=epoch + 1,
+                total_epochs=n_epochs,
+                loss=total_loss / len(train_loader),
+                val_iou=miou,
+                device_info=device_name,
+                dry_run=dry_run_sync,
+            )
+
     logger.info(f"[{variant_name}] Training complete. Best mIoU={best_iou:.4f}")
     return str(best_ckpt if best_ckpt.exists() else latest_ckpt), best_iou
 
@@ -535,7 +555,19 @@ def main():
     parser.add_argument("--epochs", type=int, default=None, help="Override ablation epoch count")
     parser.add_argument("--output", type=str, default="ablation_results.json")
     parser.add_argument("--no-resume", action="store_true", help="Disable resuming from checkpoints/previous results")
+    parser.add_argument("--no-sync", action="store_true", help="Disable continuous MongoDB Atlas sync")
+    parser.add_argument("--dry-run-sync", action="store_true", help="Preview MongoDB Atlas document sync without making network calls")
     args = parser.parse_args()
+
+    # Initialize real-time MongoDB Atlas syncer unless disabled
+    mongo_syncer = None
+    if not args.no_sync:
+        try:
+            from upload_to_cloud import MongoDBAtlasSync
+            mongo_syncer = MongoDBAtlasSync()
+            logger.info("Continuous MongoDB Atlas Sync initialized.")
+        except Exception as e:
+            logger.warning(f"Could not initialize MongoDB Atlas sync: {e}")
 
     if torch.cuda.is_available():
         logger.info(f"Using NVIDIA GPU: {torch.cuda.get_device_name(0)}")
@@ -611,7 +643,10 @@ def main():
                 else:
                     # Train from scratch or resume (ablation variant)
                     epochs = args.epochs or (20 if args.mode == "quick" else 50)
-                    ckpt_path, best_iou = train_variant(config, name, num_epochs=epochs, resume=not args.no_resume)
+                    ckpt_path, best_iou = train_variant(
+                        config, name, num_epochs=epochs, resume=not args.no_resume,
+                        mongo_syncer=mongo_syncer, dry_run_sync=args.dry_run_sync
+                    )
                     metrics = run_evaluation_only(ckpt_path, config)
 
             result = {"variant": name, "description": variant["description"], "metrics": metrics}
@@ -621,10 +656,14 @@ def main():
             all_results.append(result)
             completed_variant_names.add(name)
 
-            # Immediately save incremental results after each variant completes
+            # Immediately save incremental results locally
             with open(args.output, "w") as f:
                 json.dump(all_results, f, indent=2)
             logger.info(f"[{name}] Saved updated results to {args.output} (mIoU={metrics.get('mean_iou', 0):.4f})")
+
+            # Continuously sync variant result to MongoDB Atlas in real time
+            if mongo_syncer:
+                mongo_syncer.sync_variant(result, source_file=args.output, dry_run=args.dry_run_sync)
 
         except Exception as e:
             logger.error(f"[{name}] FAILED: {e}", exc_info=True)
@@ -636,11 +675,18 @@ def main():
             with open(args.output, "w") as f:
                 json.dump(all_results, f, indent=2)
 
+            if mongo_syncer:
+                mongo_syncer.sync_variant(err_res, source_file=args.output, dry_run=args.dry_run_sync)
+
         if torch.cuda.is_available():
             torch.cuda.empty_cache()
 
     print_results_table(all_results)
     logger.info(f"All ablation results updated in {args.output}")
+
+    if mongo_syncer:
+        device_name = torch.cuda.get_device_name(0) if torch.cuda.is_available() else "CPU"
+        mongo_syncer.sync_heartbeat(status="COMPLETED", device_info=device_name, dry_run=args.dry_run_sync)
 
 
 if __name__ == "__main__":

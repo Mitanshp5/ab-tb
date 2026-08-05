@@ -108,6 +108,54 @@ python run_ablation.py --mode eval_only --output ablation_results_100ep.json
 
 ---
 
+## Continuous MongoDB Atlas Real-Time Sync
+
+Ablation study results (metrics, IoUs, parameters) are continuously synced in real time to MongoDB Atlas as each variant finishes training or evaluation.
+
+### Configuration (`.env`)
+Store your MongoDB Atlas credentials in `.env`:
+```env
+MONGODB_USER=mitanshp3_db_user
+MONGODB_PASS=0dhm3TDzbI7aezrI
+MONGODB_CLUSTER=cluster0.mongodb.net
+MONGODB_URI=mongodb+srv://mitanshp3_db_user:0dhm3TDzbI7aezrI@cluster0.mongodb.net/?retryWrites=true&w=majority
+MONGODB_TARGET=ablation_study.results
+```
+
+### Manual Sync or Preview
+```bash
+# Preview MongoDB Atlas document structure (Dry-run mode)
+python upload_to_cloud.py --dry-run
+
+# Sync all JSON result files to MongoDB Atlas
+python upload_to_cloud.py
+```
+
+### Automatic Real-Time Sync During Ablation Run
+```bash
+# Continuous real-time sync is enabled by default whenever .env is present
+python run_ablation.py --mode full --epochs 100
+
+# Disable real-time sync if running offline
+python run_ablation.py --mode full --no-sync
+```
+
+---
+
+## Remote Monitoring Dashboard (Any Device / Phone / PC)
+
+Launch the lightweight remote monitoring server to view live status (`RUNNING`, `STOPPED`, `COMPLETED`), active epoch progress, real-time loss, mIoU, and completed variant tables on any device:
+
+```bash
+# Start remote monitoring server on port 8080
+python monitor_server.py --port 8080
+
+# Access from any phone, laptop, or tablet on the same network:
+# Open http://<your-device-ip>:8080 in any web browser
+```
+
+---
+
 ## Key Bug Fixes (already applied)
 - `models/encoder.py`: Variable skip_layers correctly assigns keys from END of list; missing keys filled with zero tensors
 - `data/dataset.py`: Windows case-insensitive glob deduplication fix
