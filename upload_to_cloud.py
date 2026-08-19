@@ -102,7 +102,14 @@ class MongoDBAtlasSync:
                 logger.info(f"[MongoDB Atlas Sync] Inserted record in {db_n}.{coll_n}")
             return True
         except Exception as e:
-            logger.error(f"[MongoDB Atlas Sync Failed] {e}")
+            err_msg = str(e)
+            if "dns" in err_msg.lower() or "nxdomain" in err_msg.lower() or "does not exist" in err_msg.lower():
+                logger.error(
+                    f"[MongoDB Atlas Sync Failed] DNS Lookup Error: The cluster domain in your MONGODB_URI is invalid or placeholder.\n"
+                    f"-> Please open MongoDB Atlas (cloud.mongodb.net), click 'Connect' -> 'Drivers', copy your full URI (e.g. mongodb+srv://user:pass@cluster0.abcde.mongodb.net), and paste it into your .env file."
+                )
+            else:
+                logger.error(f"[MongoDB Atlas Sync Failed] {e}")
             return False
 
     def sync_heartbeat(
