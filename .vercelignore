@@ -1,4 +1,4 @@
-# Ignore machine learning models and dataset files
+# Ignore heavy ML checkpoints, datasets, and local virtualenvs
 checkpoints/
 data/
 venv/
@@ -6,7 +6,6 @@ venv/
 *.pt
 *.onnx
 *.bin
-requirements.txt
 loss/
 models/
 utils/
