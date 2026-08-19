@@ -78,9 +78,9 @@ echo.
 :: Step 5: Run full ablation study (100 Epochs)
 :: ------------------------------------------------------------------------------
 echo [Step 5/5] Starting Full Ablation Study (100 Epochs)...
-echo Output file: ablation_results_100ep.json
+echo Output file: ablation_results.json (default)
 echo ------------------------------------------------------------------------------
-python run_ablation.py --mode full --epochs 100 --output ablation_results_100ep.json
+python run_ablation.py --mode full --epochs 100
 
 set RUN_EXIT_CODE=%ERRORLEVEL%
 
@@ -88,7 +88,7 @@ echo.
 echo ==============================================================================
 if %RUN_EXIT_CODE% EQU 0 (
     echo [SUCCESS] Full 100-Epoch Ablation Study Completed Successfully!
-    echo Results saved to ablation_results_100ep.json and synced to MongoDB Atlas.
+    echo Results saved to ablation_results.json and synced to MongoDB Atlas.
 ) else (
     echo [FAILED] Ablation Study exited with code %RUN_EXIT_CODE%.
     echo Check logs above for details. You can re-run this script anytime to resume.

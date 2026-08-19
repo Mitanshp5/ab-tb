@@ -58,7 +58,7 @@ run_full_ablation.bat
 
 ### Full 100-epoch ablation (Manual)
 ```bash
-python run_ablation.py --mode full --epochs 100 --output ablation_results_100ep.json
+python run_ablation.py --mode full --epochs 100
 ```
 
 ### Specific variants only
