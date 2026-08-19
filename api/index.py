@@ -15,19 +15,24 @@ except ImportError:
 def get_mongo_collection():
     uri = os.environ.get("MONGODB_URI") or os.environ.get("MONGO_URI")
     target = os.environ.get("MONGODB_TARGET", "ablation_study.results")
-    if not uri or not pymongo:
-        return None, "ablation_study", "results"
+    if not uri:
+        return None, "ablation_study", "results", "Missing MONGODB_URI environment variable on Vercel"
+    if not pymongo:
+        return None, "ablation_study", "results", "pymongo package is not available"
 
     parts = target.split(".", 1)
     db_name = parts[0] if len(parts) == 2 else "ablation_study"
     coll_name = parts[1] if len(parts) == 2 else parts[0]
 
-    client = pymongo.MongoClient(uri)
-    return client[db_name][coll_name], db_name, coll_name
+    try:
+        client = pymongo.MongoClient(uri, serverSelectionTimeoutMS=5000)
+        return client[db_name][coll_name], db_name, coll_name, None
+    except Exception as e:
+        return None, db_name, coll_name, str(e)
 
 
 def get_telemetry_payload() -> Dict[str, Any]:
-    coll, db_name, coll_name = get_mongo_collection()
+    coll, db_name, coll_name, err = get_mongo_collection()
     hb = {}
     results = []
     connected = False
@@ -41,6 +46,7 @@ def get_telemetry_payload() -> Dict[str, Any]:
                 hb = doc
             connected = True
         except Exception as e:
+            err = str(e)
             hb = {"status": "ERROR", "error": str(e)}
 
         try:
@@ -81,6 +87,7 @@ def get_telemetry_payload() -> Dict[str, Any]:
     return {
         "connected": connected,
         "target": f"{db_name}.{coll_name}",
+        "error": err,
         "heartbeat": hb,
         "results": results,
         "events": events
@@ -315,6 +322,8 @@ DASHBOARD_HTML = """<!DOCTYPE html>
             </div>
         </header>
 
+        <div id="errorBanner" style="display:none; background:rgba(244,63,94,0.12); border:1px solid #f43f5e; color:#fda4af; padding:14px 18px; border-radius:12px; margin-bottom:20px; font-size:0.875rem; line-height:1.5;"></div>
+
         <div class="progress-box">
             <div class="progress-info">
                 <span id="varName">Variant: Idle</span>
@@ -373,6 +382,15 @@ DASHBOARD_HTML = """<!DOCTYPE html>
                 const hb = data.heartbeat || {};
                 const results = data.results || [];
                 const events = data.events || [];
+
+                // Error Banner Handling
+                const errBanner = document.getElementById('errorBanner');
+                if (!data.connected && data.error) {
+                    errBanner.style.display = 'block';
+                    errBanner.innerHTML = `<strong>MongoDB Cloud Connection Alert:</strong> ${data.error}<br><small style="opacity:0.85;">Please verify that <strong>MONGODB_URI</strong> is set in Vercel Settings &rarr; Environment Variables, and that your MongoDB Atlas cluster allows Network Access from anywhere (0.0.0.0/0).</small>`;
+                } else {
+                    errBanner.style.display = 'none';
+                }
 
                 // Status
                 const st = (hb.status || (data.connected ? 'IDLE' : 'OFFLINE')).toUpperCase();
