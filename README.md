@@ -51,7 +51,12 @@ data/data/
 
 ## Running Ablation Study
 
-### Full 100-epoch ablation (all variants)
+### One-Click Windows Automated Runner (Pulls updates, installs deps, runs 100 epochs)
+```cmd
+run_full_ablation.bat
+```
+
+### Full 100-epoch ablation (Manual)
 ```bash
 python run_ablation.py --mode full --epochs 100 --output ablation_results_100ep.json
 ```
