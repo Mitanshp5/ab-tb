@@ -1,0 +1,12 @@
+# Ignore machine learning models and dataset files
+checkpoints/
+data/
+venv/
+*.pth
+*.pt
+*.onnx
+*.bin
+requirements.txt
+loss/
+models/
+utils/
