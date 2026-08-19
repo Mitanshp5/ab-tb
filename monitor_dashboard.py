@@ -40,7 +40,9 @@ def get_telemetry_payload() -> Dict[str, Any]:
     global event_logs, last_seen_heartbeat_time
 
     if is_dry_run_mode:
+        ist_tz = datetime.timezone(datetime.timedelta(hours=5, minutes=30))
         now_str = datetime.datetime.now(datetime.timezone.utc).isoformat()
+        now_ist = datetime.datetime.now(ist_tz).strftime("%H:%M:%S IST")
         return {
             "connected": True,
             "target": "ablation_study.results (Demo)",
@@ -68,7 +70,7 @@ def get_telemetry_payload() -> Dict[str, Any]:
                 }
             ],
             "events": [
-                {"timestamp": now_str, "message": "Demo: Received epoch 6 heartbeat for A9_vitb_unfrozen"}
+                {"timestamp": now_ist, "message": "Demo: Received epoch 6 heartbeat for A9_vitb_unfrozen"}
             ]
         }
 
@@ -91,8 +93,18 @@ def get_telemetry_payload() -> Dict[str, Any]:
     if hb_time and hb_time != last_seen_heartbeat_time:
         last_seen_heartbeat_time = hb_time
         evt_msg = f"Update received: {hb.get('current_variant', 'Unknown')} (Ep {hb.get('current_epoch', 0)}/{hb.get('total_epochs', 0)}, Loss: {hb.get('latest_loss', 'N/A')}, mIoU: {hb.get('latest_val_iou', 'N/A')})"
+
+        # Convert UTC timestamp to Indian Standard Time (IST, UTC+5:30)
+        ist_tz = datetime.timezone(datetime.timedelta(hours=5, minutes=30))
+        try:
+            hb_dt = datetime.datetime.fromisoformat(hb_time.replace("Z", "+00:00"))
+            ist_dt = hb_dt.astimezone(ist_tz)
+            ts_str = ist_dt.strftime("%H:%M:%S IST")
+        except Exception:
+            ts_str = datetime.datetime.now(ist_tz).strftime("%H:%M:%S IST")
+
         event_logs.insert(0, {
-            "timestamp": datetime.datetime.now(datetime.timezone.utc).strftime("%H:%M:%S UTC"),
+            "timestamp": ts_str,
             "message": evt_msg
         })
         event_logs = event_logs[:15]  # Keep last 15 updates
