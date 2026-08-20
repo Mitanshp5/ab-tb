@@ -470,17 +470,20 @@ def train_variant(
             torch.save(ckpt_dict, best_ckpt)
 
         if mongo_syncer:
-            device_name = torch.cuda.get_device_name(0) if torch.cuda.is_available() else "CPU"
-            mongo_syncer.sync_heartbeat(
-                status="RUNNING",
-                variant=variant_name,
-                current_epoch=epoch + 1,
-                total_epochs=n_epochs,
-                loss=total_loss / len(train_loader),
-                val_iou=miou,
-                device_info=device_name,
-                dry_run=dry_run_sync,
-            )
+            try:
+                device_name = torch.cuda.get_device_name(0) if torch.cuda.is_available() else "CPU"
+                mongo_syncer.sync_heartbeat(
+                    status="RUNNING",
+                    variant=variant_name,
+                    current_epoch=epoch + 1,
+                    total_epochs=n_epochs,
+                    loss=total_loss / len(train_loader),
+                    val_iou=miou,
+                    device_info=device_name,
+                    dry_run=dry_run_sync,
+                )
+            except Exception:
+                pass
 
     logger.info(f"[{variant_name}] Training complete. Best mIoU={best_iou:.4f}")
     return str(best_ckpt if best_ckpt.exists() else latest_ckpt), best_iou
@@ -668,7 +671,10 @@ def main():
 
             # Continuously sync variant result to MongoDB Atlas in real time
             if mongo_syncer:
-                mongo_syncer.sync_variant(result, source_file=args.output, dry_run=args.dry_run_sync)
+                try:
+                    mongo_syncer.sync_variant(result, source_file=args.output, dry_run=args.dry_run_sync)
+                except Exception as sync_err:
+                    logger.warning(f"[{name}] Cloud sync notice: {sync_err}. Saved locally.")
 
         except Exception as e:
             logger.error(f"[{name}] FAILED: {e}", exc_info=True)
@@ -681,7 +687,10 @@ def main():
                 json.dump(all_results, f, indent=2)
 
             if mongo_syncer:
-                mongo_syncer.sync_variant(err_res, source_file=args.output, dry_run=args.dry_run_sync)
+                try:
+                    mongo_syncer.sync_variant(err_res, source_file=args.output, dry_run=args.dry_run_sync)
+                except Exception as sync_err:
+                    logger.warning(f"[{name}] Cloud sync notice: {sync_err}. Saved locally.")
         finally:
             import gc
             gc.collect()
@@ -695,8 +704,11 @@ def main():
     logger.info(f"All ablation results updated in {args.output}")
 
     if mongo_syncer:
-        device_name = torch.cuda.get_device_name(0) if torch.cuda.is_available() else "CPU"
-        mongo_syncer.sync_heartbeat(status="COMPLETED", device_info=device_name, dry_run=args.dry_run_sync)
+        try:
+            device_name = torch.cuda.get_device_name(0) if torch.cuda.is_available() else "CPU"
+            mongo_syncer.sync_heartbeat(status="COMPLETED", device_info=device_name, dry_run=args.dry_run_sync)
+        except Exception:
+            pass
 
 
 if __name__ == "__main__":

@@ -40,9 +40,9 @@ def load_env_file(env_path: Optional[Path] = None):
 
 
 class MongoDBAtlasSync:
-    """Handles real-time syncing of ablation study results to MongoDB Atlas."""
+    """Handles real-time syncing of ablation study results to MongoDB Atlas with offline queue support."""
 
-    def __init__(self, uri: Optional[str] = None, target: Optional[str] = None):
+    def __init__(self, uri: Optional[str] = None, target: Optional[str] = None, queue_file: str = "offline_sync_queue.json"):
         load_env_file()
         uri = uri or os.environ.get("MONGODB_URI") or os.environ.get("MONGO_URI")
         if not uri:
@@ -53,6 +53,7 @@ class MongoDBAtlasSync:
                 uri = f"mongodb+srv://{user}:{password}@{host}/?retryWrites=true&w=majority"
         self.uri = uri
         self.target = target or os.environ.get("MONGODB_TARGET", "ablation_study.results")
+        self.queue_file = Path(queue_file)
 
     def parse_target(self) -> tuple[str, str]:
         target_str = self.target or "ablation_study.results"
@@ -70,11 +71,63 @@ class MongoDBAtlasSync:
             raise ImportError("Package 'pymongo' is not installed. Install via 'pip install pymongo dnspython'.")
 
         db_name, coll_name = self.parse_target()
-        client = pymongo.MongoClient(self.uri)
+        client = pymongo.MongoClient(self.uri, serverSelectionTimeoutMS=4000)
         return client[db_name][coll_name], db_name, coll_name
 
+    def _save_to_queue(self, doc: Dict[str, Any]):
+        """Save un-synced result document to local offline queue file."""
+        queue = self._load_queue()
+        variant_name = doc.get("variant")
+        if variant_name:
+            queue = [q for q in queue if q.get("variant") != variant_name]
+        queue.append(doc)
+        try:
+            with open(self.queue_file, "w", encoding="utf-8") as f:
+                json.dump(queue, f, indent=2)
+            logger.info(f"[Offline Queue] Saved '{variant_name}' to local offline queue file ({self.queue_file})")
+        except Exception as e:
+            logger.error(f"[Offline Queue Write Error] {e}")
+
+    def _load_queue(self) -> List[Dict[str, Any]]:
+        """Load pending offline sync items."""
+        if self.queue_file.exists():
+            try:
+                with open(self.queue_file, "r", encoding="utf-8") as f:
+                    return json.load(f)
+            except Exception:
+                return []
+        return []
+
+    def flush_offline_queue(self):
+        """Attempt to upload queued offline documents if network is available."""
+        queue = self._load_queue()
+        if not queue:
+            return
+
+        remaining = []
+        synced_count = 0
+        for item in queue:
+            v_name = item.get("variant", "Unknown")
+            try:
+                coll, db_n, coll_n = self._get_collection()
+                if item.get("variant"):
+                    coll.replace_one({"variant": item["variant"]}, item, upsert=True)
+                else:
+                    coll.insert_one(item)
+                synced_count += 1
+            except Exception as e:
+                remaining.append(item)
+
+        if synced_count > 0:
+            logger.info(f"[Offline Sync Restored] Successfully flushed {synced_count} queued result(s) to MongoDB Atlas!")
+            try:
+                with open(self.queue_file, "w", encoding="utf-8") as f:
+                    json.dump(remaining, f, indent=2)
+            except Exception:
+                pass
+
     def sync_variant(self, variant_result: Dict[str, Any], source_file: str = "live_sync", dry_run: bool = False) -> bool:
-        """Sync a single variant result document to MongoDB Atlas immediately."""
+        """Sync a single variant result document to MongoDB Atlas immediately (stores offline if network drops)."""
         db_name, coll_name = self.parse_target()
         timestamp = datetime.datetime.now(datetime.timezone.utc).isoformat()
 
@@ -90,6 +143,9 @@ class MongoDBAtlasSync:
             logger.info(f"[DRY-RUN] Would upsert variant '{variant_result.get('variant')}' to MongoDB Atlas ({db_name}.{coll_name})")
             return True
 
+        # Try flushing any previously queued offline items first
+        self.flush_offline_queue()
+
         try:
             coll, db_n, coll_n = self._get_collection()
             variant_name = doc.get("variant")
@@ -102,14 +158,8 @@ class MongoDBAtlasSync:
                 logger.info(f"[MongoDB Atlas Sync] Inserted record in {db_n}.{coll_n}")
             return True
         except Exception as e:
-            err_msg = str(e)
-            if "dns" in err_msg.lower() or "nxdomain" in err_msg.lower() or "does not exist" in err_msg.lower():
-                logger.error(
-                    f"[MongoDB Atlas Sync Failed] DNS Lookup Error: The cluster domain in your MONGODB_URI is invalid or placeholder.\n"
-                    f"-> Please open MongoDB Atlas (cloud.mongodb.net), click 'Connect' -> 'Drivers', copy your full URI (e.g. mongodb+srv://user:pass@cluster0.abcde.mongodb.net), and paste it into your .env file."
-                )
-            else:
-                logger.error(f"[MongoDB Atlas Sync Failed] {e}")
+            logger.warning(f"[MongoDB Sync Network Drop] Network error: {e}. Storing result in offline queue.")
+            self._save_to_queue(doc)
             return False
 
     def sync_heartbeat(
@@ -151,12 +201,18 @@ class MongoDBAtlasSync:
             logger.info(f"[DRY-RUN] Heartbeat status '{status}':\n{json.dumps(doc, indent=2)}")
             return True
 
+        # Attempt to flush queued results whenever network is alive during heartbeat
+        try:
+            self.flush_offline_queue()
+        except Exception:
+            pass
+
         try:
             coll, db_n, coll_n = self._get_collection()
             coll.replace_one({"_id": "live_status_heartbeat"}, doc, upsert=True)
             return True
         except Exception as e:
-            logger.error(f"[Heartbeat Sync Failed] {e}")
+            logger.debug(f"[Heartbeat Network Drop] {e}")
             return False
 
     def get_live_status(self) -> Dict[str, Any]:
