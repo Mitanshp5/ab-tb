@@ -53,6 +53,10 @@ def get_telemetry_payload() -> Dict[str, Any]:
             cursor = coll.find({"variant": {"$exists": True}})
             for item in cursor:
                 item.pop("_id", None)
+                # Skip failed variants (empty metrics or error field present)
+                metrics = item.get("metrics", {})
+                if item.get("error") or not metrics or not metrics.get("mean_iou"):
+                    continue
                 results.append(item)
         except Exception:
             pass
