@@ -256,8 +256,10 @@ def find_data_dirs(data_root: Path):
 @torch.no_grad()
 def evaluate_model(model, test_loader, device, num_classes, class_names):
     """Run evaluation, return metrics dict."""
-    from utils.metrics import SegmentationMetrics
+    import gc
     import numpy as np
+    from tqdm import tqdm
+    from utils.metrics import SegmentationMetrics
 
     model.eval()
     metrics = SegmentationMetrics(num_classes=num_classes, class_names=class_names)
@@ -289,8 +291,10 @@ def train_variant(
     dry_run_sync: bool = False,
 ):
     """Train a single ablation variant and return checkpoint path (supports resuming)."""
+    import gc
     import torch
     import torch.nn as nn
+    from tqdm import tqdm
     from torch.cuda.amp import GradScaler, autocast
     from torch.optim import AdamW
     from torch.optim.lr_scheduler import CosineAnnealingWarmRestarts
@@ -678,6 +682,11 @@ def main():
 
             if mongo_syncer:
                 mongo_syncer.sync_variant(err_res, source_file=args.output, dry_run=args.dry_run_sync)
+        finally:
+            import gc
+            gc.collect()
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
 
         if torch.cuda.is_available():
             torch.cuda.empty_cache()
