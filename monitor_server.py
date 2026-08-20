@@ -74,9 +74,7 @@ def get_monitoring_data() -> Dict[str, Any]:
         except Exception as e:
             logger.error(f"Error fetching live status: {e}")
         try:
-            raw_results = mongo_syncer.get_all_results()
-            # Filter out failed variants (empty metrics or error field)
-            results = [r for r in raw_results if r.get("metrics") and r["metrics"].get("mean_iou") and not r.get("error")]
+            results = mongo_syncer.get_all_results()
         except Exception as e:
             logger.error(f"Error fetching results: {e}")
 

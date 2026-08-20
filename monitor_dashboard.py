@@ -83,9 +83,7 @@ def get_telemetry_payload() -> Dict[str, Any]:
         target = mongo_syncer.target
         try:
             hb = mongo_syncer.get_live_status()
-            raw_results = mongo_syncer.get_all_results()
-            # Filter out failed variants (empty metrics or error field)
-            results = [r for r in raw_results if r.get("metrics") and r["metrics"].get("mean_iou") and not r.get("error")]
+            results = mongo_syncer.get_all_results()
             connected = True
         except Exception as e:
             logger.error(f"Error reading from MongoDB Cloud: {e}")
@@ -385,20 +383,24 @@ MINIMAL_DASHBOARD_HTML = """<!DOCTYPE html>
             </div>
         </div>
 
-        <div class="section-title">Completed Variants</div>
-        <div class="table-box">
+        <div class="section-title">All Variants in MongoDB Cloud</div>
+        <div class="table-box" style="overflow-x: auto;">
             <table>
                 <thead>
                     <tr>
                         <th>Variant</th>
+                        <th>Status</th>
                         <th>mIoU</th>
+                        <th>mDice</th>
+                        <th>PixAcc</th>
                         <th>Dust IoU</th>
                         <th>RunDown IoU</th>
                         <th>Scratch IoU</th>
+                        <th>Latency</th>
                     </tr>
                 </thead>
                 <tbody id="tableBody">
-                    <tr><td colspan="5" style="text-align:center; color:var(--text-secondary); padding:20px;">No results recorded yet.</td></tr>
+                    <tr><td colspan="9" style="text-align:center; color:var(--text-secondary); padding:20px;">No results recorded yet.</td></tr>
                 </tbody>
             </table>
         </div>
@@ -450,16 +452,38 @@ MINIMAL_DASHBOARD_HTML = """<!DOCTYPE html>
                 // Table
                 const tbody = document.getElementById('tableBody');
                 if (results.length === 0) {
-                    tbody.innerHTML = '<tr><td colspan="5" style="text-align:center; color:var(--text-secondary); padding:20px;">No results recorded yet.</td></tr>';
+                    tbody.innerHTML = '<tr><td colspan="9" style="text-align:center; color:var(--text-secondary); padding:20px;">No results recorded yet.</td></tr>';
                 } else {
+                    const fmtPct = (val) => (val !== undefined && val !== null && !isNaN(val)) ? (val * 100).toFixed(1) + '%' : 'N/A';
+                    const fmtNum = (val, decimals=1) => (val !== undefined && val !== null && !isNaN(val)) ? val.toFixed(decimals) : 'N/A';
+
                     tbody.innerHTML = results.map(r => {
                         const m = r.metrics || {};
+                        const hasMetrics = m.mean_iou !== undefined && m.mean_iou !== null;
+                        
+                        let statusHtml = '';
+                        if (r.error) {
+                            statusHtml = `<span style="color:var(--accent-red); font-size:0.75rem; font-weight:600;">FAILED (${r.error})</span>`;
+                        } else if (hasMetrics) {
+                            const ep = m.checkpoint_epoch !== undefined ? ` (Ep ${m.checkpoint_epoch})` : '';
+                            statusHtml = `<span style="color:var(--accent-green); font-size:0.75rem; font-weight:600;">COMPLETED${ep}</span>`;
+                        } else {
+                            statusHtml = `<span style="color:var(--text-secondary); font-size:0.75rem;">NO DATA</span>`;
+                        }
+
                         return `<tr>
-                            <td><strong>${r.variant || ''}</strong></td>
-                            <td style="color:var(--accent-green);">${m.mean_iou ? (m.mean_iou * 100).toFixed(1) + '%' : 'N/A'}</td>
-                            <td>${m.iou_Dust ? (m.iou_Dust * 100).toFixed(1) + '%' : 'N/A'}</td>
-                            <td>${m.iou_RunDown ? (m.iou_RunDown * 100).toFixed(1) + '%' : 'N/A'}</td>
-                            <td>${m.iou_Scratch ? (m.iou_Scratch * 100).toFixed(1) + '%' : 'N/A'}</td>
+                            <td>
+                                <strong>${r.variant || ''}</strong>
+                                ${r.description ? `<br><small style="color:var(--text-secondary); font-size:0.72rem;">${r.description}</small>` : ''}
+                            </td>
+                            <td>${statusHtml}</td>
+                            <td style="color:${hasMetrics ? 'var(--accent-green)' : 'inherit'}; font-weight:600;">${fmtPct(m.mean_iou)}</td>
+                            <td>${fmtPct(m.mean_dice)}</td>
+                            <td>${fmtPct(m.pixel_accuracy)}</td>
+                            <td>${fmtPct(m.iou_Dust)}</td>
+                            <td>${fmtPct(m.iou_RunDown)}</td>
+                            <td>${fmtPct(m.iou_Scratch)}</td>
+                            <td>${m.avg_inference_ms ? fmtNum(m.avg_inference_ms, 1) + ' ms' : 'N/A'}</td>
                         </tr>`;
                     }).join('');
                 }
