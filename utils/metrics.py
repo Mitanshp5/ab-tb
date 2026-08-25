@@ -78,16 +78,22 @@ def calculate_dice(
     target = target[valid]
     
     dice_per_class = torch.zeros(num_classes, device=pred.device)
-    
+
     for cls in range(num_classes):
         pred_cls = (pred == cls).float()
         target_cls = (target == cls).float()
-        
+
         intersection = (pred_cls * target_cls).sum()
         total = pred_cls.sum() + target_cls.sum()
-        
-        dice_per_class[cls] = (2 * intersection + smooth) / (total + smooth)
-    
+
+        if total > 0:
+            dice_per_class[cls] = (2 * intersection) / (total + smooth)
+        else:
+            # Class absent from BOTH prediction and target: undefined, not perfect.
+            # Returning 1.0 here (the old `smooth/smooth` behaviour) silently
+            # inflated the mean Dice of rare classes such as RunDown.
+            dice_per_class[cls] = float('nan')
+
     return dice_per_class
 
 
@@ -117,103 +123,294 @@ def calculate_pixel_accuracy(
     return (correct / total).item()
 
 
+def _legacy_batch_dice(
+    pred: torch.Tensor,
+    target: torch.Tensor,
+    num_classes: int,
+    smooth: float = 1e-6,
+    ignore_index: int = -100
+) -> torch.Tensor:
+    """Reproduce the ORIGINAL per-batch Dice, bug included, for comparison only.
+
+    The original :func:`calculate_dice` returned ``smooth / smooth == 1.0`` for
+    any class absent from both prediction and target. That is the behaviour
+    that inflated rare-class Dice on the published dashboard. It is preserved
+    here verbatim -- and ONLY here -- so a corrected run can be diffed against
+    the old results. Never use this for reporting.
+    """
+    pred = pred.flatten()
+    target = target.flatten()
+
+    valid = target != ignore_index
+    pred = pred[valid]
+    target = target[valid]
+
+    dice_per_class = torch.zeros(num_classes, device=pred.device)
+    for cls in range(num_classes):
+        pred_cls = (pred == cls).float()
+        target_cls = (target == cls).float()
+        intersection = (pred_cls * target_cls).sum()
+        total = pred_cls.sum() + target_cls.sum()
+        dice_per_class[cls] = (2 * intersection + smooth) / (total + smooth)
+    return dice_per_class
+
+
 class SegmentationMetrics:
-    """Class to track and compute segmentation metrics over batches.
-    
-    Tracks IoU, Dice, and pixel accuracy across multiple batches,
-    then computes mean metrics.
-    
+    """Track and compute segmentation metrics over a whole dataset.
+
+    Metrics are accumulated as raw confusion-matrix counts across every batch
+    and reduced ONCE in :meth:`compute`. This is the standard dataset-level
+    (a.k.a. "global" or "aggregated") protocol used by Cityscapes / ADE20K /
+    Pascal VOC.
+
+    Why this matters (and what changed):
+      * The previous implementation computed IoU and Dice *per batch* and then
+        averaged those per-batch scores. With 57 test images and a rare class
+        such as RunDown appearing in only a handful of them, that estimator is
+        strongly biased and unstable.
+      * Worse, the old per-batch Dice returned ``smooth / smooth == 1.0`` for
+        any class absent from both prediction and target. Rare classes were
+        scored as "perfect" on every batch that did not contain them, which is
+        how the study ended up publishing ``dice_RunDown = 0.90`` alongside
+        ``iou_RunDown = 0.376`` -- an impossible pair, since Dice is pinned to
+        IoU by ``Dice = 2*IoU / (1 + IoU)`` (0.376 -> 0.546).
+
+    Nothing is dropped: the old per-batch numbers are still computed and
+    reported under ``legacy_*`` keys so a corrected run can be diffed directly
+    against results already published to the dashboard.
+
     Example:
-        metrics = SegmentationMetrics(num_classes=2)
+        metrics = SegmentationMetrics(num_classes=4, class_names=[...])
         for pred, target in dataloader:
             metrics.update(pred, target)
         results = metrics.compute()
     """
-    
+
     def __init__(
         self,
         num_classes: int,
         class_names: Optional[List[str]] = None,
-        ignore_index: int = -100
+        ignore_index: int = -100,
+        background_index: int = 0
     ) -> None:
         """Initialize metrics tracker.
-        
+
         Args:
             num_classes: Number of classes.
             class_names: Optional list of class names for reporting.
             ignore_index: Index to ignore in metrics.
+            background_index: Class treated as background when reporting the
+                defect-only ("foreground") means. Set to None to disable.
         """
         self.num_classes = num_classes
         self.class_names = class_names or [f'class_{i}' for i in range(num_classes)]
         self.ignore_index = ignore_index
+        self.background_index = background_index
         self.reset()
-    
+
     def reset(self) -> None:
         """Reset all accumulated metrics."""
-        self.iou_sum = torch.zeros(self.num_classes)
-        self.dice_sum = torch.zeros(self.num_classes)
+        # Dataset-level confusion counts (the primary, corrected statistics).
+        self.confusion = torch.zeros(self.num_classes, self.num_classes, dtype=torch.float64)
         self.pixel_correct = 0
         self.pixel_total = 0
         self.batch_count = 0
-        self.class_counts = torch.zeros(self.num_classes)
-    
-    def update(self, pred: torch.Tensor, target: torch.Tensor) -> None:
 
+        # Legacy per-batch accumulators, kept so the corrected numbers can be
+        # compared against everything already published.
+        self.iou_sum = torch.zeros(self.num_classes)
+        self.dice_sum = torch.zeros(self.num_classes)
+        self.class_counts = torch.zeros(self.num_classes)
+        self.legacy_dice_counts = torch.zeros(self.num_classes)
+
+    def update(self, pred: torch.Tensor, target: torch.Tensor) -> None:
+        """Accumulate one batch of predictions.
+
+        Args:
+            pred: Predicted class indices (B, H, W), or logits (B, C, H, W).
+            target: Ground truth class indices (B, H, W).
+        """
         if pred.dim() == 4:
             pred = pred.argmax(dim=1)
-        
-        pred = pred.detach().cpu()
-        target = target.detach().cpu()
-        
-        iou = calculate_iou(pred, target, self.num_classes, self.ignore_index)
-        dice = calculate_dice(pred, target, self.num_classes, ignore_index=self.ignore_index)
-        
-        iou_valid = ~torch.isnan(iou)
-        iou = torch.where(iou_valid, iou, torch.zeros_like(iou))
-        
-        self.iou_sum += iou
-        self.dice_sum += dice
-        self.class_counts += iou_valid.float()
-        
-        # Pixel accuracy
+
+        pred = pred.detach().cpu().flatten()
+        target = target.detach().cpu().flatten().long()
+
         valid = target != self.ignore_index
-        self.pixel_correct += ((pred == target) & valid).sum().item()
-        self.pixel_total += valid.sum().item()
-        
+        pred_v = pred[valid].long()
+        target_v = target[valid]
+
+        # Guard against out-of-range labels rather than silently corrupting the
+        # confusion matrix (a stray class id in a YOLO label file would
+        # otherwise wrap around via bincount).
+        in_range = (pred_v >= 0) & (pred_v < self.num_classes) & \
+                   (target_v >= 0) & (target_v < self.num_classes)
+        if not bool(in_range.all()):
+            dropped = int((~in_range).sum())
+            logger.warning(
+                f"Dropping {dropped} pixel(s) with class ids outside "
+                f"[0, {self.num_classes - 1}] while accumulating metrics."
+            )
+            pred_v = pred_v[in_range]
+            target_v = target_v[in_range]
+
+        if target_v.numel() > 0:
+            idx = target_v * self.num_classes + pred_v
+            counts = torch.bincount(idx, minlength=self.num_classes ** 2)
+            self.confusion += counts.reshape(self.num_classes, self.num_classes).to(torch.float64)
+
+        self.pixel_correct += int((pred_v == target_v).sum())
+        self.pixel_total += int(target_v.numel())
+
+        # --- legacy per-batch bookkeeping (reported, never used as headline) ---
+        iou = calculate_iou(pred, target, self.num_classes, self.ignore_index)
+        dice = _legacy_batch_dice(pred, target, self.num_classes, ignore_index=self.ignore_index)
+
+        iou_valid = ~torch.isnan(iou)
+        dice_valid = ~torch.isnan(dice)
+        self.iou_sum += torch.where(iou_valid, iou, torch.zeros_like(iou))
+        self.dice_sum += torch.where(dice_valid, dice, torch.zeros_like(dice))
+        self.class_counts += iou_valid.float()
+        self.legacy_dice_counts += dice_valid.float()
+
         self.batch_count += 1
-    
+
     def compute(self) -> Dict[str, float]:
-        
-        class_counts = torch.clamp(self.class_counts, min=1)
-        
-        iou_per_class = self.iou_sum / class_counts
-        dice_per_class = self.dice_sum / self.batch_count
-        valid_classes = self.class_counts > 0
-        mean_iou = iou_per_class[valid_classes].mean().item() if valid_classes.any() else 0.0
-        mean_dice = dice_per_class[valid_classes].mean().item() if valid_classes.any() else 0.0
-        
+        """Reduce accumulated counts into a flat metric dictionary.
+
+        Returns:
+            Dict of metric name -> float. Every per-class metric is emitted for
+            every class; classes absent from both prediction and ground truth
+            are reported as NaN and excluded from the means (their support is
+            still reported so the absence stays visible).
+        """
+        conf = self.confusion
+        tp = torch.diag(conf)
+        pred_sum = conf.sum(dim=0)     # pixels predicted as class c
+        target_sum = conf.sum(dim=1)   # pixels labelled class c (support)
+        fp = pred_sum - tp
+        fn = target_sum - tp
+        union = pred_sum + target_sum - tp
+
+        # A class is "present" if it appears in the ground truth or the
+        # prediction anywhere in the dataset.
+        present = union > 0
+        support_present = target_sum > 0
+
+        nan = float('nan')
+        iou = torch.where(present, tp / union.clamp(min=1e-12), torch.full_like(tp, nan))
+        denom = pred_sum + target_sum
+        dice = torch.where(present, (2 * tp) / denom.clamp(min=1e-12), torch.full_like(tp, nan))
+        precision = torch.where(pred_sum > 0, tp / pred_sum.clamp(min=1e-12), torch.full_like(tp, nan))
+        recall = torch.where(target_sum > 0, tp / target_sum.clamp(min=1e-12), torch.full_like(tp, nan))
+        f1 = dice  # for hard labels, per-class F1 and Dice are the same quantity
+
+        def _mean(values: torch.Tensor, mask: torch.Tensor) -> float:
+            sel = values[mask & ~torch.isnan(values)]
+            return float(sel.mean()) if sel.numel() > 0 else 0.0
+
+        all_mask = present
+        if self.background_index is not None and 0 <= self.background_index < self.num_classes:
+            fg_mask = present.clone()
+            fg_mask[self.background_index] = False
+        else:
+            fg_mask = present
+
         pixel_acc = self.pixel_correct / max(self.pixel_total, 1)
-        
-        results = {
-            'mean_iou': mean_iou,
-            'mean_dice': mean_dice,
-            'pixel_accuracy': pixel_acc
+
+        # Frequency-weighted IoU (weights each class by its share of GT pixels).
+        total_gt = float(target_sum.sum())
+        if total_gt > 0:
+            freq = target_sum / total_gt
+            fw_terms = torch.where(present & ~torch.isnan(iou), freq * iou, torch.zeros_like(iou))
+            fwiou = float(fw_terms.sum())
+        else:
+            fwiou = 0.0
+
+        results: Dict[str, float] = {
+            # --- headline (corrected, dataset-level) ---
+            'mean_iou': _mean(iou, all_mask),
+            'mean_dice': _mean(dice, all_mask),
+            'pixel_accuracy': pixel_acc,
+            # --- defect-only means (background excluded) ---
+            'mean_iou_defect': _mean(iou, fg_mask),
+            'mean_dice_defect': _mean(dice, fg_mask),
+            # --- means restricted to classes that actually have ground truth ---
+            # A class with zero GT pixels but some predictions scores IoU 0
+            # (pure false positives) and drags the means above down. That is
+            # the correct penalty, but the GT-present view is reported too so
+            # the two readings can be told apart.
+            'mean_iou_gt_present': _mean(iou, support_present),
+            'mean_dice_gt_present': _mean(dice, support_present),
+            'mean_iou_defect_gt_present': _mean(iou, fg_mask & support_present),
+            'mean_dice_defect_gt_present': _mean(dice, fg_mask & support_present),
+            # --- additional aggregate views ---
+            'frequency_weighted_iou': fwiou,
+            'mean_accuracy': _mean(recall, support_present),
+            'mean_precision': _mean(precision, all_mask),
+            'mean_recall': _mean(recall, support_present),
+            'mean_f1': _mean(f1, all_mask),
+            'mean_precision_defect': _mean(precision, fg_mask),
+            'mean_recall_defect': _mean(recall, fg_mask & support_present),
+            'mean_f1_defect': _mean(f1, fg_mask),
+            # --- provenance ---
+            'num_classes_present': int(present.sum()),
+            'total_pixels_evaluated': int(self.pixel_total),
+            'num_batches': int(self.batch_count),
+            'metrics_protocol': 'dataset_level_confusion_v2',
         }
-        
+
         for i, name in enumerate(self.class_names):
-            results[f'iou_{name}'] = iou_per_class[i].item()
-            results[f'dice_{name}'] = dice_per_class[i].item()
-        
+            results[f'iou_{name}'] = float(iou[i])
+            results[f'dice_{name}'] = float(dice[i])
+            results[f'precision_{name}'] = float(precision[i])
+            results[f'recall_{name}'] = float(recall[i])
+            results[f'f1_{name}'] = float(f1[i])
+            # Support makes "this class is unmeasurable" visible instead of
+            # letting a 4-instance class silently drag the mean down.
+            results[f'support_px_{name}'] = int(target_sum[i])
+            results[f'predicted_px_{name}'] = int(pred_sum[i])
+            results[f'tp_{name}'] = int(tp[i])
+            results[f'fp_{name}'] = int(fp[i])
+            results[f'fn_{name}'] = int(fn[i])
+
+        # --- legacy per-batch numbers, for direct comparison against the
+        #     results already published to the dashboard ---
+        legacy_iou = self.iou_sum / torch.clamp(self.class_counts, min=1)
+        legacy_dice = self.dice_sum / torch.clamp(self.legacy_dice_counts, min=1)
+        legacy_valid = self.class_counts > 0
+        results['legacy_mean_iou'] = (
+            float(legacy_iou[legacy_valid].mean()) if bool(legacy_valid.any()) else 0.0
+        )
+        results['legacy_mean_dice'] = (
+            float(legacy_dice[legacy_valid].mean()) if bool(legacy_valid.any()) else 0.0
+        )
+        for i, name in enumerate(self.class_names):
+            results[f'legacy_iou_{name}'] = float(legacy_iou[i])
+            results[f'legacy_dice_{name}'] = float(legacy_dice[i])
+
         return results
-    
+
+    def get_confusion_matrix(self) -> torch.Tensor:
+        """Return the raw accumulated confusion matrix (rows = GT, cols = pred)."""
+        return self.confusion.clone()
+
     def __str__(self) -> str:
         """String representation of current metrics."""
         results = self.compute()
         lines = [
             f"Mean IoU: {results['mean_iou']:.4f}",
+            f"Mean IoU (defects only): {results['mean_iou_defect']:.4f}",
             f"Mean Dice: {results['mean_dice']:.4f}",
-            f"Pixel Accuracy: {results['pixel_accuracy']:.4f}"
+            f"Pixel Accuracy: {results['pixel_accuracy']:.4f}",
+            f"Frequency-weighted IoU: {results['frequency_weighted_iou']:.4f}",
         ]
+        for name in self.class_names:
+            lines.append(
+                f"  {name:<12} IoU={results[f'iou_{name}']:.4f} "
+                f"Dice={results[f'dice_{name}']:.4f} "
+                f"support={results[f'support_px_{name}']} px"
+            )
         return '\n'.join(lines)
 
 
@@ -438,39 +635,101 @@ def calculate_boundary_accuracy(
 
 
 if __name__ == "__main__":
-    # Test metrics
+    # Self-test: verifies the dataset-level accumulator against hand-computed
+    # ground truth, and pins the Dice/IoU identity that the old per-batch
+    # implementation violated.
     logging.basicConfig(level=logging.INFO)
-    
-    num_classes = 2
-    batch_size = 4
-    H, W = 128, 128
-    
-    # Create mock predictions
-    pred = torch.randint(0, num_classes, (batch_size, H, W))
-    target = torch.randint(0, num_classes, (batch_size, H, W))
-    
-    # Test individual functions
-    print("Testing individual metric functions:")
-    iou = calculate_iou(pred, target, num_classes)
-    dice = calculate_dice(pred, target, num_classes)
-    acc = calculate_pixel_accuracy(pred, target)
-    
-    print(f"  IoU per class: {iou}")
-    print(f"  Dice per class: {dice}")
-    print(f"  Pixel accuracy: {acc:.4f}")
-    
-    # Test SegmentationMetrics class
-    print("\nTesting SegmentationMetrics class:")
-    metrics = SegmentationMetrics(
-        num_classes=num_classes,
-        class_names=['background', 'defect']
-    )
-    
-    # Simulate multiple batches
-    for _ in range(5):
-        pred = torch.randint(0, num_classes, (batch_size, H, W))
-        target = torch.randint(0, num_classes, (batch_size, H, W))
-        metrics.update(pred, target)
-    
-    results = metrics.compute()
-    print(f"  Results: {results}")
+
+    print("=" * 66)
+    print("SegmentationMetrics self-test")
+    print("=" * 66)
+
+    # --- Test 1: exact values on a tiny, hand-checkable example -------------
+    # 4 classes. Class 3 never appears in GT or prediction -> must be NaN,
+    # must NOT be counted as a perfect score.
+    target = torch.tensor([[[0, 0, 1, 1],
+                            [0, 0, 1, 2]]])          # 6x class0? -> counts below
+    pred = torch.tensor([[[0, 0, 1, 0],
+                          [0, 1, 1, 2]]])
+
+    m = SegmentationMetrics(num_classes=4, class_names=['bg', 'a', 'b', 'c'])
+    m.update(pred, target)
+    r = m.compute()
+
+    # GT counts: bg=4, a=3, b=1, c=0 | Pred counts: bg=4, a=3, b=1, c=0
+    # bg: TP=3 -> IoU 3/(4+4-3)=0.60 ; Dice 6/8 = 0.75
+    # a : TP=2 -> IoU 2/(3+3-2)=0.50 ; Dice 4/6
+    # b : TP=1 -> IoU 1/(1+1-1)=1.00 ; Dice 1.0
+    # c : absent everywhere -> NaN, excluded from means
+    assert abs(r['iou_bg'] - 0.60) < 1e-9, r['iou_bg']
+    assert abs(r['iou_a'] - 0.50) < 1e-9, r['iou_a']
+    assert abs(r['iou_b'] - 1.00) < 1e-9, r['iou_b']
+    assert abs(r['dice_bg'] - 0.75) < 1e-9, r['dice_bg']
+    assert abs(r['dice_a'] - 4 / 6) < 1e-9, r['dice_a']
+    assert np.isnan(r['iou_c']), r['iou_c']
+    assert np.isnan(r['dice_c']), r['dice_c']
+    assert r['support_px_c'] == 0
+    assert r['num_classes_present'] == 3
+    assert abs(r['mean_iou'] - (0.60 + 0.50 + 1.00) / 3) < 1e-9, r['mean_iou']
+    assert abs(r['mean_iou_defect'] - (0.50 + 1.00) / 2) < 1e-9, r['mean_iou_defect']
+    assert abs(r['pixel_accuracy'] - 6 / 8) < 1e-9, r['pixel_accuracy']
+    assert r['tp_bg'] == 3 and r['fp_bg'] == 1 and r['fn_bg'] == 1
+    print("  [pass] exact per-class IoU/Dice, NaN for absent class, defect-only mean")
+
+    # --- Test 2: the Dice <-> IoU identity that used to be violated ---------
+    # For hard labels, Dice must always equal 2*IoU / (1 + IoU).
+    torch.manual_seed(0)
+    m2 = SegmentationMetrics(num_classes=4, class_names=['bg', 'Dust', 'RunDown', 'Scratch'])
+    for _ in range(12):
+        # Heavily imbalanced, mimicking the real dataset: RunDown almost never
+        # appears, which is exactly the case the old implementation mishandled.
+        t = torch.zeros(2, 32, 32, dtype=torch.long)
+        t[:, :6, :6] = 1
+        if _ == 0:
+            t[:, 20:22, 20:22] = 2          # RunDown in a single batch only
+        t[:, 10:14, :] = 3
+        p = t.clone()
+        p[:, :3, :3] = 0                     # miss part of Dust
+        p[:, 20:21, 20:22] = 0               # miss half of RunDown
+        m2.update(p, t)
+    r2 = m2.compute()
+    for name in ['bg', 'Dust', 'RunDown', 'Scratch']:
+        iou_v, dice_v = r2[f'iou_{name}'], r2[f'dice_{name}']
+        if np.isnan(iou_v):
+            continue
+        expected = 2 * iou_v / (1 + iou_v)
+        assert abs(dice_v - expected) < 1e-6, (name, iou_v, dice_v, expected)
+    print("  [pass] Dice == 2*IoU/(1+IoU) holds for every class")
+
+    # Demonstrate the bug this replaces: the legacy per-batch Dice for the rare
+    # class is inflated far above what its IoU permits.
+    legacy_rundown = r2['legacy_dice_RunDown']
+    correct_rundown = r2['dice_RunDown']
+    print(f"  RunDown  corrected Dice={correct_rundown:.4f}  "
+          f"legacy per-batch Dice={legacy_rundown:.4f}  "
+          f"(legacy inflated by {legacy_rundown - correct_rundown:+.4f})")
+    assert legacy_rundown > correct_rundown, "expected legacy Dice to be inflated"
+    print("  [pass] legacy_* keys retained and reproduce the old inflated value")
+
+    # --- Test 3: batch-order invariance (dataset-level accumulation) --------
+    a = SegmentationMetrics(num_classes=4, class_names=['bg', 'a', 'b', 'c'])
+    b = SegmentationMetrics(num_classes=4, class_names=['bg', 'a', 'b', 'c'])
+    torch.manual_seed(1)
+    batches = [(torch.randint(0, 3, (2, 16, 16)), torch.randint(0, 3, (2, 16, 16)))
+               for _ in range(5)]
+    for p_, t_ in batches:
+        a.update(p_, t_)
+    for p_, t_ in reversed(batches):
+        b.update(p_, t_)
+    assert abs(a.compute()['mean_iou'] - b.compute()['mean_iou']) < 1e-12
+    print("  [pass] result is invariant to batch order")
+
+    # --- Test 4: full key inventory -----------------------------------------
+    m3 = SegmentationMetrics(num_classes=4, class_names=['Background', 'Dust', 'RunDown', 'Scratch'])
+    m3.update(torch.zeros(1, 8, 8, dtype=torch.long), torch.zeros(1, 8, 8, dtype=torch.long))
+    keys = sorted(m3.compute().keys())
+    print(f"\n  {len(keys)} metric keys emitted per variant:")
+    for k in keys:
+        print(f"    - {k}")
+
+    print("\nAll self-tests passed.")
