@@ -1,0 +1,334 @@
+{
+  "_note": "Snapshot of ab-tb.vercel.app / MongoDB Atlas as published BEFORE the metric and protocol corrections. Kept for comparison only. These numbers were produced with (a) per-batch-averaged IoU, (b) a Dice that returned 1.0 for classes absent from both prediction and target, and (c) best-epoch selection performed on the test split itself. They are NOT comparable with results from the corrected runner.",
+  "_snapshot_taken": "2026-08-25T19:01:04.202418+00:00",
+  "_source": "https://ab-tb.vercel.app/api/telemetry",
+  "heartbeat": {
+    "type": "heartbeat",
+    "status": "COMPLETED",
+    "current_variant": null,
+    "current_epoch": null,
+    "total_epochs": null,
+    "epoch_progress_pct": 0.0,
+    "latest_loss": null,
+    "latest_val_iou": null,
+    "device": "NVIDIA GeForce RTX 3060",
+    "error": null,
+    "last_heartbeat": "2026-08-20T06:15:46.319055+00:00"
+  },
+  "results": [
+    {
+      "_upload_meta": {
+        "source_file": "ablation_results_100ep.json",
+        "synced_at": "2026-08-20T06:13:39.119910+00:00"
+      },
+      "variant": "A10_no_augmentation",
+      "description": "No augmentation (geometric/photometric transforms disabled)",
+      "metrics": {},
+      "error": "name 'tqdm' is not defined"
+    },
+    {
+      "_upload_meta": {
+        "source_file": "ablation_results_100ep.json",
+        "synced_at": "2026-08-20T06:13:39.310073+00:00"
+      },
+      "variant": "A11_high_gamma",
+      "description": "Focal loss gamma=4.0 (harder focus on difficult samples)",
+      "metrics": {},
+      "error": "name 'tqdm' is not defined"
+    },
+    {
+      "_upload_meta": {
+        "source_file": "ablation_results_100ep.json",
+        "synced_at": "2026-08-20T06:13:39.495907+00:00"
+      },
+      "variant": "A12_lower_lr",
+      "description": "Lower learning rate (1e-5 instead of 5e-5)",
+      "metrics": {},
+      "error": "name 'tqdm' is not defined"
+    },
+    {
+      "_upload_meta": {
+        "source_file": "ablation_results_100ep.json",
+        "synced_at": "2026-08-20T06:13:39.687132+00:00"
+      },
+      "variant": "A13_higher_lr",
+      "description": "Higher learning rate (1e-4)",
+      "metrics": {},
+      "error": "name 'tqdm' is not defined"
+    },
+    {
+      "_upload_meta": {
+        "source_file": "ablation_results_scale.json",
+        "synced_at": "2026-08-20T06:13:47.339555+00:00"
+      },
+      "variant": "A1_fresh_local",
+      "description": "Full model trained from scratch on local dataset (3-scale baseline)",
+      "metrics": {
+        "mean_iou": 0.45189398527145386,
+        "mean_dice": 0.6868851780891418,
+        "pixel_accuracy": 0.738198085739236,
+        "iou_Background": 0.6621571183204651,
+        "dice_Background": 0.7756035923957825,
+        "iou_Dust": 0.5772685408592224,
+        "dice_Dust": 0.7135583162307739,
+        "iou_RunDown": 0.26549002528190613,
+        "dice_RunDown": 0.8289932012557983,
+        "iou_Scratch": 0.30266016721725464,
+        "dice_Scratch": 0.42938539385795593,
+        "avg_inference_ms": 56.89492623011271,
+        "checkpoint_epoch": 12,
+        "num_samples": 57
+      }
+    },
+    {
+      "_upload_meta": {
+        "source_file": "ablation_results_100ep.json",
+        "synced_at": "2026-08-20T06:13:39.869589+00:00"
+      },
+      "variant": "A1_full_model",
+      "description": "Full model \u2014 DINOv2-ViT-B/14 + DenseFPN-UNet (3-scale) + combined loss",
+      "metrics": {
+        "mean_iou": 0.4824310541152954,
+        "mean_dice": 0.7055994868278503,
+        "pixel_accuracy": 0.741289595689108,
+        "iou_Background": 0.6682988405227661,
+        "dice_Background": 0.7669258117675781,
+        "iou_Dust": 0.5507242679595947,
+        "dice_Dust": 0.683827817440033,
+        "iou_RunDown": 0.3756249248981476,
+        "dice_RunDown": 0.9013162851333618,
+        "iou_Scratch": 0.3350761830806732,
+        "dice_Scratch": 0.47032812237739563,
+        "avg_inference_ms": 30.14452854792277,
+        "checkpoint_epoch": 72,
+        "num_samples": 57
+      }
+    },
+    {
+      "_upload_meta": {
+        "source_file": "ablation_results_100ep.json",
+        "synced_at": "2026-08-20T06:13:40.056253+00:00"
+      },
+      "variant": "A2_single_scale",
+      "description": "Single-scale features (only deep layer [11], no FPN)",
+      "metrics": {
+        "mean_iou": 0.49018213152885437,
+        "mean_dice": 0.7142263054847717,
+        "pixel_accuracy": 0.8174596854235139,
+        "iou_Background": 0.767440140247345,
+        "dice_Background": 0.849229097366333,
+        "iou_Dust": 0.6448236107826233,
+        "dice_Dust": 0.7665897607803345,
+        "iou_RunDown": 0.208927184343338,
+        "dice_RunDown": 0.7643596529960632,
+        "iou_Scratch": 0.339537650346756,
+        "dice_Scratch": 0.47672680020332336,
+        "avg_inference_ms": 29.65866724650065,
+        "checkpoint_epoch": 15,
+        "num_samples": 57
+      }
+    },
+    {
+      "_upload_meta": {
+        "source_file": "ablation_results_scale.json",
+        "synced_at": "2026-08-20T06:13:47.534988+00:00"
+      },
+      "variant": "A2_single_scale_fixed",
+      "description": "Single-scale: only deep layer [11]; shallow+mid filled with zeros",
+      "metrics": {
+        "mean_iou": 0.4436447024345398,
+        "mean_dice": 0.6682279706001282,
+        "pixel_accuracy": 0.7517812976561199,
+        "iou_Background": 0.680097758769989,
+        "dice_Background": 0.7908554077148438,
+        "iou_Dust": 0.5881397128105164,
+        "dice_Dust": 0.7227103114128113,
+        "iou_RunDown": 0.17894960939884186,
+        "dice_RunDown": 0.6954463720321655,
+        "iou_Scratch": 0.32739171385765076,
+        "dice_Scratch": 0.4638998806476593,
+        "avg_inference_ms": 54.98518943786621,
+        "checkpoint_epoch": 11,
+        "num_samples": 57
+      }
+    },
+    {
+      "_upload_meta": {
+        "source_file": "ablation_results_100ep.json",
+        "synced_at": "2026-08-20T06:13:40.260314+00:00"
+      },
+      "variant": "A3_two_scale",
+      "description": "Two-scale features ([7, 11], mid + deep)",
+      "metrics": {
+        "mean_iou": 0.5406524538993835,
+        "mean_dice": 0.7597596645355225,
+        "pixel_accuracy": 0.8169128210278384,
+        "iou_Background": 0.7778107523918152,
+        "dice_Background": 0.8664466142654419,
+        "iou_Dust": 0.6153697371482849,
+        "dice_Dust": 0.7402716875076294,
+        "iou_RunDown": 0.3836173415184021,
+        "dice_RunDown": 0.8686138987541199,
+        "iou_Scratch": 0.38581210374832153,
+        "dice_Scratch": 0.5637063980102539,
+        "avg_inference_ms": 29.413779576619465,
+        "checkpoint_epoch": 82,
+        "num_samples": 57
+      }
+    },
+    {
+      "_upload_meta": {
+        "source_file": "ablation_results_scale.json",
+        "synced_at": "2026-08-20T06:13:47.752582+00:00"
+      },
+      "variant": "A3_two_scale_fixed",
+      "description": "Two-scale: mid+deep [7,11]; shallow filled with zeros",
+      "metrics": {
+        "mean_iou": 0.4595324397087097,
+        "mean_dice": 0.6952232122421265,
+        "pixel_accuracy": 0.7428307411542526,
+        "iou_Background": 0.6654649376869202,
+        "dice_Background": 0.7750241756439209,
+        "iou_Dust": 0.5782599449157715,
+        "dice_Dust": 0.7153297662734985,
+        "iou_RunDown": 0.26786893606185913,
+        "dice_RunDown": 0.8261133432388306,
+        "iou_Scratch": 0.3265359699726105,
+        "dice_Scratch": 0.46442553400993347,
+        "avg_inference_ms": 53.7892500559489,
+        "checkpoint_epoch": 10,
+        "num_samples": 57
+      }
+    },
+    {
+      "_upload_meta": {
+        "source_file": "ablation_results_100ep.json",
+        "synced_at": "2026-08-20T06:13:40.447479+00:00"
+      },
+      "variant": "A4_frozen_encoder",
+      "description": "Fully frozen encoder throughout (no encoder fine-tuning)",
+      "metrics": {
+        "mean_iou": 0.47748857736587524,
+        "mean_dice": 0.6931921243667603,
+        "pixel_accuracy": 0.8121648297933606,
+        "iou_Background": 0.7606724500656128,
+        "dice_Background": 0.8388116359710693,
+        "iou_Dust": 0.6357260942459106,
+        "dice_Dust": 0.7607471346855164,
+        "iou_RunDown": 0.16953045129776,
+        "dice_RunDown": 0.6935580968856812,
+        "iou_Scratch": 0.3440254032611847,
+        "dice_Scratch": 0.4796515107154846,
+        "avg_inference_ms": 29.45472796758016,
+        "checkpoint_epoch": 44,
+        "num_samples": 57
+      }
+    },
+    {
+      "_upload_meta": {
+        "source_file": "ablation_results_100ep.json",
+        "synced_at": "2026-08-20T06:13:40.658391+00:00"
+      },
+      "variant": "A5_dice_only",
+      "description": "Loss: Dice only (no Focal loss)",
+      "metrics": {
+        "mean_iou": 0.5205314755439758,
+        "mean_dice": 0.7452717423439026,
+        "pixel_accuracy": 0.8459153989533994,
+        "iou_Background": 0.813668429851532,
+        "dice_Background": 0.8900873064994812,
+        "iou_Dust": 0.6554393172264099,
+        "dice_Dust": 0.7773951888084412,
+        "iou_RunDown": 0.2744591236114502,
+        "dice_RunDown": 0.837346613407135,
+        "iou_Scratch": 0.3385590612888336,
+        "dice_Scratch": 0.47625789046287537,
+        "avg_inference_ms": 29.86826499303182,
+        "checkpoint_epoch": 35,
+        "num_samples": 57
+      }
+    },
+    {
+      "_upload_meta": {
+        "source_file": "ablation_results_100ep.json",
+        "synced_at": "2026-08-20T06:13:40.849171+00:00"
+      },
+      "variant": "A6_focal_only",
+      "description": "Loss: Focal only (no Dice loss)",
+      "metrics": {
+        "mean_iou": 0.3584195077419281,
+        "mean_dice": 0.5489975214004517,
+        "pixel_accuracy": 0.6738488713697005,
+        "iou_Background": 0.5602163672447205,
+        "dice_Background": 0.6846152544021606,
+        "iou_Dust": 0.5880025029182434,
+        "dice_Dust": 0.7159828543663025,
+        "iou_RunDown": 0.08535242080688477,
+        "dice_RunDown": 0.48125389218330383,
+        "iou_Scratch": 0.20010671019554138,
+        "dice_Scratch": 0.3141380548477173,
+        "avg_inference_ms": 26.906689008076984,
+        "checkpoint_epoch": 83,
+        "num_samples": 57
+      }
+    },
+    {
+      "_upload_meta": {
+        "source_file": "ablation_results_100ep.json",
+        "synced_at": "2026-08-20T06:13:41.068532+00:00"
+      },
+      "variant": "A7_no_class_weights",
+      "description": "Uniform class weights [1, 1, 1, 1] (no class balancing)",
+      "metrics": {
+        "mean_iou": 0.5109745860099792,
+        "mean_dice": 0.734965980052948,
+        "pixel_accuracy": 0.8259404642253657,
+        "iou_Background": 0.786670446395874,
+        "dice_Background": 0.8711206316947937,
+        "iou_Dust": 0.6295929551124573,
+        "dice_Dust": 0.7572017312049866,
+        "iou_RunDown": 0.28773319721221924,
+        "dice_RunDown": 0.8342009782791138,
+        "iou_Scratch": 0.339901864528656,
+        "dice_Scratch": 0.4773404896259308,
+        "avg_inference_ms": 29.40771182378133,
+        "checkpoint_epoch": 47,
+        "num_samples": 57
+      }
+    },
+    {
+      "_upload_meta": {
+        "source_file": "ablation_results_100ep.json",
+        "synced_at": "2026-08-20T06:13:46.922080+00:00"
+      },
+      "variant": "A8_small_decoder",
+      "description": "Smaller decoder channels [128, 64, 32]",
+      "metrics": {
+        "mean_iou": 0.49277469515800476,
+        "mean_dice": 0.7177773118019104,
+        "pixel_accuracy": 0.7740884481892407,
+        "iou_Background": 0.7117689847946167,
+        "dice_Background": 0.8102588057518005,
+        "iou_Dust": 0.6012503504753113,
+        "dice_Dust": 0.7325321435928345,
+        "iou_RunDown": 0.3086780309677124,
+        "dice_RunDown": 0.844420313835144,
+        "iou_Scratch": 0.34940144419670105,
+        "dice_Scratch": 0.48389795422554016,
+        "avg_inference_ms": 28.317491213480633,
+        "checkpoint_epoch": 77,
+        "num_samples": 57
+      }
+    },
+    {
+      "_upload_meta": {
+        "source_file": "ablation_results_100ep.json",
+        "synced_at": "2026-08-20T06:13:47.134439+00:00"
+      },
+      "variant": "A9_vitb_unfrozen",
+      "description": "ViT-B encoder unfrozen from epoch 5 (aggressive fine-tuning)",
+      "metrics": {},
+      "error": "Unable to allocate 4.45 MiB for an array with shape (1080, 1440, 3) and data type uint8"
+    }
+  ]
+}

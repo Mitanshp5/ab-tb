@@ -12,7 +12,25 @@ except ImportError:
     pymongo = None
 
 
+# Known study variants, used to flag one-off documents left over from ad-hoc
+# reruns (A1_fresh_local, A2_single_scale_fixed, ...) that would otherwise
+# appear on the dashboard as if they were study rows.
+STUDY_VARIANTS = [
+    "A0_pretrained_reference",
+    "A1_full_model", "A2_single_scale", "A3_two_scale", "A4_partial_unfreeze",
+    "A5_dice_only", "A6_focal_only", "A7_no_class_weights", "A8_small_decoder",
+    "A9_vitb_unfrozen", "A10_no_augmentation", "A11_high_gamma",
+    "A12_lower_lr", "A13_higher_lr",
+]
+
+# Reused across warm serverless invocations. Building a MongoClient per request
+# is both slow (fresh TLS handshake to Atlas on every 2.5s dashboard poll) and
+# wasteful of the cluster connection limit.
+_CLIENT = None
+
+
 def get_mongo_collection():
+    global _CLIENT
     uri = os.environ.get("MONGODB_URI") or os.environ.get("MONGO_URI")
     target = os.environ.get("MONGODB_TARGET", "ablation_study.results")
     if not uri:
@@ -25,10 +43,27 @@ def get_mongo_collection():
     coll_name = parts[1] if len(parts) == 2 else parts[0]
 
     try:
-        client = pymongo.MongoClient(uri, serverSelectionTimeoutMS=5000)
-        return client[db_name][coll_name], db_name, coll_name, None
+        if _CLIENT is None:
+            _CLIENT = pymongo.MongoClient(
+                uri,
+                serverSelectionTimeoutMS=5000,
+                connectTimeoutMS=5000,
+                maxPoolSize=2,
+                appname="ablation-dashboard",
+            )
+        return _CLIENT[db_name][coll_name], db_name, coll_name, None
     except Exception as e:
+        _CLIENT = None
         return None, db_name, coll_name, str(e)
+
+
+def _variant_sort_key(name):
+    """Order rows A0, A1, A2 ... A13 rather than lexicographically."""
+    head = (name or "").split("_")[0]
+    try:
+        return (0, int(head[1:]), name or "")
+    except (ValueError, IndexError):
+        return (1, 0, name or "")
 
 
 def get_telemetry_payload() -> Dict[str, Any]:
@@ -84,13 +119,38 @@ def get_telemetry_payload() -> Dict[str, Any]:
         except Exception:
             pass
 
+    # Tag rows that are not part of the current study, and surface which run
+    # each row came from so results from different protocols are not silently
+    # mixed together in one table.
+    current_run = hb.get("run_id")
+    for r in results:
+        r["is_study_variant"] = r.get("variant") in STUDY_VARIANTS
+        r["is_current_run"] = bool(current_run) and r.get("run_id") == current_run
+
+    results.sort(key=lambda r: _variant_sort_key(r.get("variant")))
+
+    run_ids = sorted({r.get("run_id") for r in results if r.get("run_id")})
+    stale = [r.get("variant") for r in results if not r["is_study_variant"]]
+    completed = [r for r in results if (r.get("metrics") or {}).get("mean_iou") is not None]
+
     return {
         "connected": connected,
         "target": f"{db_name}.{coll_name}",
         "error": err,
         "heartbeat": hb,
         "results": results,
-        "events": events
+        "events": events,
+        "current_run_id": current_run,
+        "run_ids": run_ids,
+        "stale_variants": stale,
+        "num_completed": len(completed),
+        "num_failed": len([r for r in results if r.get("error")]),
+        "pending_offline_docs": hb.get("pending_offline_docs"),
+        "metrics_protocol": next(
+            (r["metrics"].get("metrics_protocol") for r in completed
+             if isinstance(r.get("metrics"), dict) and r["metrics"].get("metrics_protocol")),
+            None,
+        ),
     }
 
 
@@ -356,17 +416,19 @@ DASHBOARD_HTML = """<!DOCTYPE html>
                     <tr>
                         <th>Variant</th>
                         <th>Status</th>
-                        <th>mIoU</th>
+                        <th title="Mean IoU over all 4 classes">mIoU</th>
+                        <th title="Mean IoU over defect classes only (background excluded)">mIoU (defect)</th>
                         <th>mDice</th>
                         <th>PixAcc</th>
+                        <th title="IoU weighted by each class share of ground-truth pixels">fwIoU</th>
                         <th>Dust IoU</th>
-                        <th>RunDown IoU</th>
+                        <th title="RunDown has very few annotated instances in the test split — read with care">RunDown IoU</th>
                         <th>Scratch IoU</th>
                         <th>Latency</th>
                     </tr>
                 </thead>
                 <tbody id="tableBody">
-                    <tr><td colspan="9" style="text-align:center; color:var(--text-secondary); padding:20px;">No results recorded yet.</td></tr>
+                    <tr><td colspan="11" style="text-align:center; color:var(--text-secondary); padding:20px;">No results recorded yet.</td></tr>
                 </tbody>
             </table>
         </div>
@@ -431,6 +493,16 @@ DASHBOARD_HTML = """<!DOCTYPE html>
                 } else {
                     const fmtPct = (val) => (val !== undefined && val !== null && !isNaN(val)) ? (val * 100).toFixed(1) + '%' : 'N/A';
                     const fmtNum = (val, decimals=1) => (val !== undefined && val !== null && !isNaN(val)) ? val.toFixed(decimals) : 'N/A';
+                    // Show a class score next to how many ground-truth pixels
+                    // backed it, so an unmeasurable class cannot be mistaken
+                    // for a genuinely poor one.
+                    const support = (m, cls) => {
+                        const v = fmtPct(m['iou_' + cls]);
+                        const px = m['support_px_' + cls];
+                        if (px === undefined || px === null) return v;
+                        if (px === 0) return `<span style="color:var(--accent-amber);" title="no ground-truth pixels for this class">n/a</span>`;
+                        return `${v} <small style="color:var(--text-secondary); font-size:0.68rem;">(${px.toLocaleString()} px)</small>`;
+                    };
 
                     tbody.innerHTML = results.map(r => {
                         const m = r.metrics || {};
@@ -441,7 +513,10 @@ DASHBOARD_HTML = """<!DOCTYPE html>
                             statusHtml = `<span style="color:var(--accent-red); font-size:0.75rem; font-weight:600;">FAILED (${r.error})</span>`;
                         } else if (hasMetrics) {
                             const ep = m.checkpoint_epoch !== undefined ? ` (Ep ${m.checkpoint_epoch})` : '';
-                            statusHtml = `<span style="color:var(--accent-green); font-size:0.75rem; font-weight:600;">COMPLETED${ep}</span>`;
+                            const sel = m.selected_on === 'validation_split'
+                                ? `<br><small style="color:var(--text-secondary); font-size:0.64rem;" title="Best epoch chosen on a held-out validation split; this score is from the untouched test split">held-out</small>`
+                                : (m.selected_on ? `<br><small style="color:var(--accent-amber); font-size:0.64rem;">${m.selected_on}</small>` : '');
+                            statusHtml = `<span style="color:var(--accent-green); font-size:0.75rem; font-weight:600;">COMPLETED${ep}</span>${sel}`;
                         } else {
                             statusHtml = `<span style="color:var(--text-secondary); font-size:0.75rem;">NO DATA</span>`;
                         }
@@ -449,14 +524,18 @@ DASHBOARD_HTML = """<!DOCTYPE html>
                         return `<tr>
                             <td>
                                 <strong>${r.variant || ''}</strong>
+                                ${r.is_study_variant === false ? `<span title="Not part of the current study — left over from an ad-hoc rerun" style="margin-left:6px; font-size:0.62rem; color:var(--accent-amber); border:1px solid var(--accent-amber); border-radius:4px; padding:1px 4px;">STALE</span>` : ''}
                                 ${r.description ? `<br><small style="color:var(--text-secondary); font-size:0.72rem;">${r.description}</small>` : ''}
+                                ${r.run_id ? `<br><small style="color:var(--text-secondary); font-size:0.65rem;">run ${r.run_id}</small>` : ''}
                             </td>
                             <td>${statusHtml}</td>
                             <td style="color:${hasMetrics ? 'var(--accent-green)' : 'inherit'}; font-weight:600;">${fmtPct(m.mean_iou)}</td>
+                            <td style="font-weight:600;">${fmtPct(m.mean_iou_defect)}</td>
                             <td>${fmtPct(m.mean_dice)}</td>
                             <td>${fmtPct(m.pixel_accuracy)}</td>
+                            <td>${fmtPct(m.frequency_weighted_iou)}</td>
                             <td>${fmtPct(m.iou_Dust)}</td>
-                            <td>${fmtPct(m.iou_RunDown)}</td>
+                            <td>${support(m, 'RunDown')}</td>
                             <td>${fmtPct(m.iou_Scratch)}</td>
                             <td>${m.avg_inference_ms ? fmtNum(m.avg_inference_ms, 1) + ' ms' : 'N/A'}</td>
                         </tr>`;
